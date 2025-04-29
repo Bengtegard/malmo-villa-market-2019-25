@@ -1,0 +1,1126 @@
+---
+title: House Price Prediction in Malmö
+subtitle: Regression analysis
+author: "David Bengtegård Eksell"
+output: 
+  html_document:
+    latex_engine: xelatex
+always_allow_html: true
+encoding: UTF-8
+---
+
+## Load & Clean Data
+```{r setp, warning = FALSE, message = FALSE}
+set.seed(1337)
+knitr::opts_chunk$set(fig.width = 10, fig.height = 8)
+
+library(skimr)    
+library(tidyverse)
+library(ggplot2)
+library(car)
+library(e1071)
+library(lubridate)
+library(tidymodels)
+library(caret)
+library(ggpmisc)
+library(ggrepel)
+library(scales)
+library(performance)
+library(broom)
+library(viridis)
+library(ggridges)
+library(lme4)
+library(knitr)
+library(kableExtra)
+library(MuMIn)
+library(Metrics)
+library(sjPlot)
+library(httpgd)
+library(ggmap)
+library(sf)
+library(RColorBrewer)
+library(broom.mixed)
+
+source("/home/bengtegard/src/02_school_ec/06_r/ds24_r/kunskapskontroll/bengtegard_theme.R", encoding = "UTF-8")
+
+n_cores <- parallel::detectCores()  
+if(n_cores == 8) {                  
+  n_cores <- 6                      
+} else {
+  n_cores <- 3                      
+}
+
+data <- read_csv("hemnet_sold_properties.csv")
+
+data <- data |>
+  rename(
+    house_price = slutpris,
+    listing_price = utgangspris,
+    price_development = prisutv,
+    number_of_rooms = antal_rum,
+    living_area = boarea,
+    secondary_area = biarea,
+    plot_area = tomtarea,
+    year_built = byggar,
+    operating_cost = driftkostnad,
+    sale_date = sälj_datum,
+    neighborhood = område
+  ) |>
+  mutate(neighborhood = str_to_title(neighborhood))
+
+# Convert sales dates for later analysis.
+swedish_months <- c("januari" = "January", "februari" = "February", "mars" = "March", "april" = "April",
+                    "maj" = "May", "juni" = "June", "juli" = "July", "augusti" = "August",
+                    "september" = "September", "oktober" = "October", "november" = "November", "december" = "December")
+
+data$sale_date <- str_replace_all(data$sale_date, swedish_months)
+data$sale_date <- dmy(data$sale_date)
+```
+
+## Lets take a quick look at our data
+
+```{r, warning = FALSE, message = FALSE}
+data
+```
+
+## Descriptive statisticis summary and missing values
+
+```{r, warning = FALSE, message = FALSE}
+options(scipen = 999) 
+skim(data)
+```
+
+From this it becomes apperent that there is missing values in several columns. Most important is the variable secondary_area which has 759 missing values. The reason for this might be because it is less likely for a house to have a glazed veranda/porch or an unfinished attic. The definition for secondary area is: a space that is arranged in such a way that its usage is limited during certain parts of the year. 
+
+Since the secondary_area may be a significant predictor in modeling the final house price, we will create an indicator variable to account for its missing values (NA will be replaced with 0). This will allow the regression model to assess how the presence or absence of data for secondary_area influences the house price.
+
+Additionally, other columns with missing values, such as number_of_rooms (with 34 missing values) and operating_cost (with 71 missing values), will be handled appropriately. Since these variables are essential for accurate modeling, rows with missing values in these columns will be dropped to maintain consistency and avoid skewing the results. This approach ensures that the analysis remains reliable, while minimizing the potential negative impact of incomplete data.
+
+### Add indicator variable and remove missing values
+
+```{r, warning = FALSE, message = FALSE}
+data_clean <- data |>
+  mutate(
+    secondary_area_missing = ifelse(is.na(secondary_area), 1, 0),
+    secondary_area = ifelse(is.na(secondary_area), 0, secondary_area),
+    sale_date = as.Date(sale_date),
+    month = month(sale_date),
+    year = year(sale_date),
+    neighborhood = as.character(neighborhood)
+  ) |>
+  filter(
+    !is.na(number_of_rooms),
+    !is.na(operating_cost),
+    !is.na(price_development),
+    !is.na(neighborhood),
+    !is.na(living_area),
+    !is.na(plot_area),
+    !is.na(year_built),
+    !neighborhood %in% c("Malmö", "Torg", "Tomt", "Trädgård") # remove neighborhoods that is incomplete
+  ) |>
+  mutate(
+    neighborhood = case_when(
+      neighborhood == "By" ~ "Kyrkby",
+      neighborhood == "Kyrby" ~ "Kyrkby",
+      TRUE ~ neighborhood
+    ),
+    neighborhood = as.factor(neighborhood)
+  )
+
+# Check how many rows that were dropped
+n_rows_drop <- nrow(data) - nrow(data_clean)
+cat("Number of dropped rows:", n_rows_drop)
+```
+
+```{r}
+# Check the tidy dataset to see e.g. the new indicator variable
+head(data_clean)
+```
+
+# Data exploration
+
+## The response variable: house_price
+
+```{r, warning = FALSE, message = FALSE }
+# Plot distribution of house prices
+ggplot(data_clean, aes(x = house_price)) +
+    geom_histogram(fill = "#1B9E77") +
+    geom_vline(aes(xintercept = mean(house_price, na.rm = TRUE)),
+                color = "#e24b1d", linetype = "dashed", linewidth = 1) +
+    geom_vline(aes(xintercept = median(house_price, na.rm = TRUE)),
+                color = "#4a4aa7", linetype = "dashed", linewidth = 1) +
+    scale_x_continuous(
+      labels = scales::comma_format(scale = 1e-6, suffix = "M"),
+      breaks = seq(0, max(data_clean$house_price, na.rm = TRUE), by = 0.5e7)) +
+    bengtegard_theme() +
+    labs(
+      y = "Frequency", 
+      x = "Final House Price in (MSEK)",
+      caption = "Blue line = Median price | Red line = Mean price"
+    )
+
+# Calculate skewness
+skew_value <- skewness(data_clean$house_price, na.rm = TRUE)
+cat("Skewness of target variable: ", skew_value)
+
+```
+
+The target variable is right-skewed. Median is often a better measure of central tendency in skewed distributions. It is less sensitive to extreme outliers compared to the mean, which can be distorted by those outliers. In this case a skewness of 2.3 suggests that the distribution is skewed, so the median provides a more robust measure of central tendency. However, when doing regression modeling the response variable might later on benifit from log-transformation.
+
+## Log-tranformation of house_price
+```{r}
+# Plot distribution of house prices
+ggplot(data_clean, aes(x = log(house_price))) +
+    geom_histogram(fill = "#1B9E77") +
+    scale_x_continuous(
+      labels = scales::comma_format(scale = 1e-6, suffix = "M"),
+      breaks = seq(0, max(data_clean$house_price, na.rm = TRUE), by = 0.5e7)) +
+    bengtegard_theme() +
+    labs(
+      y = "Frequency", 
+      x = "Final House Price in (MSEK)"
+    )
+```
+
+Looks more normally distributed after log-tranformation.
+
+## Extreme values in the response variable
+
+```{r, warning = FALSE, message = FALSE}
+# Zoom in on the distribution
+ggplot(data_clean, aes(
+        x = house_price,
+        fill = (house_price == 20000000 | house_price > 20000000))) +
+    geom_histogram(bins = 30) +
+    scale_x_continuous(
+      labels = scales::comma_format(scale = 1e-6, suffix = "M"),
+      breaks = seq(0, max(data_clean$house_price, na.rm = TRUE), by = 0.5e7)) +
+    coord_cartesian(xlim = c(1300000, 30000000),
+                    ylim = c(0, 20)) +
+    scale_fill_manual(values = c("TRUE" = "#FF6347", "FALSE" = "#1B9E77")) + 
+    bengtegard_theme() +
+    theme(legend.position = "bottom") +
+    labs(
+      y = "Frequency", 
+      x = "Final House Price in (MSEK)",
+    )
+```
+
+A total of ten house were sold for more than twenty millions (SEK). Dont know if we want to include those observations in our final analysis, because they might have a high leverage in our regression model. However, there is one house sold over 25 millions which will be removed since it will most probably affect the modeling later on. 
+
+```{r, warning = FALSE, message = FALSE}
+data_clean <- data_clean |>
+  filter(house_price < 25000000)
+```
+
+## Create histograms for all numeric variables
+
+```{r, warning = FALSE, message = FALSE}
+data_clean |>
+  select(where(is.numeric), -latitude, -longitude) |>
+  gather(key = "Variable", value = "Value") |>  # Reshape for faceting
+  ggplot(aes(x = Value)) + 
+  geom_histogram(fill = "#1B9E77") + 
+  facet_wrap(~Variable, scales = "free", ncol = 3) +
+  bengtegard_theme() +
+  labs(x = "Value", y = "Frequency")
+```
+
+## How has the house price evolved over time?
+
+```{r, warning = FALSE, message = FALSE}
+# Aggregate data
+data_summary <- data_clean |>
+  group_by(year, month) |>
+  summarise(avg_price = median(house_price, na.rm = TRUE)) |>
+  ungroup()
+
+# Create a complete grid of all year-month combinations (from 2020 to 2024)
+complete_grid <- expand.grid(
+  year = 2020:2024,  
+  month = 1:12 
+)
+
+# Join the complete grid with your summarized data
+data_complete <- complete_grid |>
+  left_join(data_summary, by = c("year", "month")) |>
+  mutate(avg_price = ifelse(is.na(avg_price), NA, avg_price),
+        month = factor(month, levels = 1:12, labels = month.abb))
+
+# Function for converting millions and add "millions (SEK)"
+million_sek_format <- function(x) {
+  paste0(format(x / 1e6, big.mark = ","), " millions (SEK)")
+}
+
+# Create the heatmap
+ggplot(data_complete, aes(x = month, y = year, fill = avg_price)) +
+  geom_tile() +
+  scale_fill_viridis_c(labels = million_sek_format) +
+  labs(
+  title = "Monthly Median Sale Prices of Houses in Malmö (2020–2024)",
+  subtitle = "Aggregated Based on Final Sale Prices (Median)",
+    x = "Month",
+    y = "Year",
+    fill = "Average Sale Price",
+    caption = "Data from Hemnet.se"
+  ) +
+  geom_text(aes(label = round((avg_price / 1e6), digits = 3)),
+    color = "white"
+  ) +
+  bengtegard_theme()
+```
+
+Pandemic effects in 2020? We can clearly spot higher prices both for 2021 and 2022, and the general sense was that many people wanted to move to an house after the isolation period, which might explain the higher demands.
+
+## Sales trends over time
+
+```{r, warning = FALSE, message = FALSE}
+sales_trends_df <- data_clean |>
+  group_by(year, month) |>
+  summarise(sales_count = n(), .groups = "drop") |>
+  mutate(Date = as.Date(paste(year, month, "01", sep = "-")))
+
+sales_trends_plot <- ggplot(sales_trends_df, aes(x = Date, y = sales_count)) +
+  geom_line(color = "#1B9E77", size = 1) +
+  geom_point(color = "#D95F02", size = 1.5) +
+  labs(
+    title = "Number of Houses Sold in Malmö from 2019 to 2025",
+    x = "Year and Month",
+    y = "Sales Frequency",
+    caption = "Data from hemnet.se"
+  ) +
+  scale_x_date(
+    breaks = date_breaks("6 months"),
+    labels = date_format("%b\n%Y")
+  ) +
+  scale_y_continuous(labels = label_comma()) +
+  bengtegard_theme() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+sales_trends_plot
+```
+
+
+## Is there any spatial trends of the distribution of price? 
+
+```{r malmo-map-plot, eval=FALSE}
+# Code for generating the Malmö map
+register_google(key = "google_key")
+
+malmo_center <- c(lon = 13.0038, lat = 55.6049)
+zoom_level <- 11
+
+malmo_map <- get_map(location = malmo_center, zoom = zoom_level, maptype = "roadmap", source = "google")
+
+malmo_data_sf <- data |>
+    select(latitude, longitude, house_price, neighborhood) |>
+    filter(
+        latitude >= 55 & latitude <= 56,
+        longitude >= 12 & longitude <= 14
+    ) |>
+    st_as_sf(coords = c("longitude", "latitude"))
+
+ggmap(malmo_map) +
+    geom_sf(data = malmo_data_sf, aes(color = log(house_price)), alpha = 0.5, size = 1.5, inherit.aes = FALSE) +
+    scale_color_viridis_c(name = "Log of Final price (SEK)") +
+    ggtitle("House Prices in Malmö from 2019 to 2025") +
+    bengtegard_theme() +
+    labs(caption = "Data from hemnet.se") +
+    theme(
+        legend.position = "bottom",
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank()
+    )
+
+# Save the plot
+ggsave("malmo_map.png", width = 8, height = 6)
+```
+
+![Malmo Map](malmo_map.png)
+
+Houses near the coast line (e.g Limhamn-Bunkeflo or Slottsstaden) is more expensive compared to houses located outside the inner city (e.g Husie or Oxie). This makes sense because ocean proximity is an premium feature that naturally drives up housing prices.
+
+## Which neighborhoods in Malmö is most expensive?
+
+```{r, warning = FALSE, message = FALSE}
+# Aggregate the data by neighborhood to get the average price
+top10_neighborhoods <- data |>
+  group_by(neighborhood) |>
+  filter(
+    (!(neighborhood %in% c("Torg", "By"))), # remove incorrect neighborhoods
+    n() > 5, # keep only neighborhoods with 5+ sold houses
+    latitude >= 0 & longitude >= 0) |>
+  summarise(
+    median_price = median(house_price, na.rm = TRUE),
+    n = n()) |>
+  arrange(desc(median_price)) |>
+  slice_head(n = 10)
+
+# Bar plot for the top 10 most expensive neighborhoods
+ggplot(top10_neighborhoods, aes(x = reorder(neighborhood, median_price), y = median_price / 1e6, fill = median_price)) +
+  geom_col() +  
+  scale_fill_viridis_c(labels = million_sek_format, name = "") +  
+  bengtegard_theme() +
+  labs(
+    title = "House Prices in the 10 Most Expensive Neighborhoods of Malmö",
+    x = "Neighborhood", 
+    y = "Median House Price in (MSEK)",
+    caption = "Data from Hemnet.se") +
+  geom_text(aes(label = median_price / 1e6),
+    color = "#ffffff",
+    hjust = 1.5
+  ) +
+  coord_flip()
+```
+
+## What is the distribution of house prices in Malmö's most expensive neighborhoods?
+
+```{r, warning = FALSE, message = FALSE}
+# Filter data to include only the top 10 expensive neighborhoods
+top10_names <- top10_neighborhoods$neighborhood
+
+data_top10 <- data_clean |>
+  select(neighborhood, house_price) |>
+  filter(neighborhood %in% top10_names)
+
+# Ridge plot of price distributions
+ggplot(data_top10, aes(x = house_price / 1e6, y = fct_reorder(neighborhood, house_price), fill = neighborhood)) +
+  geom_jitter(data = data_top10, height = 0.1, alpha = 0.4, shape = 21) +
+  geom_density_ridges(scale = 1.5, alpha = 0.7, color = "white") +
+  scale_x_continuous(name = "Final House Price (MSEK)") +
+  scale_y_discrete(name = "Neighborhood") +
+  bengtegard_theme() +
+  labs(
+    title = "Distribution of House Prices in Malmö's Most Expensive Neighborhoods",
+    caption = "Data from Hemnet.se"
+  ) +
+  theme(legend.position = "none")
+```
+
+# Regression analysis
+
+I've chosen to drop both listing_price and price_development from the regression analysis, as these variables are directly derived from or highly correlated with the response variable house_price. Including them would introduce data leakage, leading to an overestimation of model performance and reducing its generalizability in real-world scenarios where the house price is not yet known.
+
+
+### The goal of the regression is twofold:
+
+**Explanation:** To identify key variables that significantly contribute to explaining the variation in house prices in Malmö, focusing on factors like living area, number of rooms, and neighborhood differences.
+
+**Prediction:** To build a model that can predict house prices based on these variables, helping to estimate the value of properties in Malmö under different conditions.
+
+
+## Split data into three sets: train, test and validation - stratified by neighborhood.
+
+```{r, warning = FALSE, message = FALSE}
+data_regression <- data_clean |>
+  select(-listing_price, -price_development)
+
+# Stratified split: Create training set (60%) stratified by 'neighborhood'
+train_index <- createDataPartition(data_regression$neighborhood, p = 0.6, list = FALSE)
+houses_train <- data_regression[train_index, ]
+
+remaining_data <- data_regression[-train_index, ]
+
+# Stratified split: Create test and validation sets (20% each, total 40% for test+validate)
+test_val_index <- createDataPartition(remaining_data$neighborhood, p = 0.5, list = FALSE)
+houses_test <- remaining_data[test_val_index, ]
+houses_validate <- remaining_data[-test_val_index, ]
+
+# Check the proportions and number of rows
+data_split_proportions <- sapply(list(train = houses_train, test = houses_test, validate = houses_validate), nrow) / nrow(data_regression)
+data_split_proportions
+```
+
+## Correlations with house_price
+```{r, warning = FALSE, message = FALSE}
+cor_matrix <- data_regression |> 
+  select(where(is.numeric)) |> 
+  cor() # calculate correlation 
+
+# Order by house_price correlation
+ordered_vars <- names(sort(cor_matrix[, "house_price"], decreasing = TRUE)) 
+
+# Reorder the correlation matrix
+cor_matrix <- cor_matrix[ordered_vars, ordered_vars]
+
+# Plot correlation matrix using corrplot
+corrplot::corrplot(cor_matrix, method = "color", type = "upper", 
+                   addCoef.col = "black", number.cex = 0.7, tl.cex = 0.8,
+                   tl.col = "black", diag = FALSE)
+```
+
+
+## Plotting the most promising predictors
+
+The most promising predictors for house price is:
+
+  living_area (r = 0.67)
+
+  number_of_rooms (r = 0.49)
+
+  operating_cost (r = 0.38)
+
+  plot_area (r = 0.32)
+
+The numeric variable with the highest correlation with house_price is the living_area. This make a lot of sense; big houses are generally more expensive.
+
+```{r, warning = FALSE, message = FALSE}
+pred1 <- ggplot(data_regression, aes(x = living_area, y = house_price / 1e6)) +
+  geom_point(alpha = 0.5, color = "#1B9E77") +
+  stat_poly_line() +
+  stat_poly_eq(use_label(c("R2"))) +
+  geom_text_repel(
+    aes(label = ifelse(living_area > 360, rownames(data_clean), "")),
+    size = 3,
+    color = "red"
+  ) +
+  labs(
+    x = "Living Area (m²)",
+    y = "House Price (MSEK)",
+    title = "House Price vs Living Area with Outliers Labeled"
+  ) +
+  bengtegard_theme()
+
+pred1
+```
+
+The scatter plot with line of best fit (95% confidence interval) shows a strong, positive relationship between the response variable house_price and the predictor living_area (with an model marginal of R2 = 0.45). A possible high leverage point is labeled to (row 1530) and a possible outlier (row 303). Even though it's an its an high-value, it follows the regression line.
+
+
+
+The variable with the second highest correlation with house_price is the number_of_rooms. Most likely the number_of_rooms (including living_area) works as an proxy for the size of the house. Which is not that suprising.
+
+```{r, warning = FALSE, message = FALSE}
+pred2 <- ggplot(data_regression, aes(
+  x = factor(number_of_rooms), 
+  y = house_price / 1e6)) +
+  geom_point(alpha = 0.5, size = 2, color = "#1B9E77") +
+  scale_y_continuous(labels = scales::comma) +
+  labs(
+    x = "Number of Rooms",
+    y = "House Price (MSEK)"
+  ) +
+  bengtegard_theme()
+
+pred2
+```
+
+From this boxplot we can see that there is a positive relationship between the predictor number_of_rooms and the response variable house_price. An increased number of rooms in a house is associated with an higher price. However, one house with 12 rooms and two houses with 13 rooms does not seem to follow this trend. 
+
+
+The third best predictor for house_price is operating_cost. Higher operating costs might be associated with larger homes as well as premium homes with pools, saunas, underfloor heating, etc. So it might both be a proxy for the size of the house and its quality/luxury.
+
+```{r, warning = FALSE, message = FALSE}
+pred3 <- ggplot(data_regression, aes(x = operating_cost, y = house_price / 1e6)) +
+  geom_point(alpha = 0.5, color = "#1B9E77") +
+  stat_poly_line() +
+  stat_poly_eq(use_label(c("R2"))) +
+  geom_text_repel(
+    aes(label = ifelse(operating_cost > 150000, rownames(data_clean), "")),
+    size = 3,
+    color = "red"
+  ) +
+  labs(
+    x = "Operating Cost",
+    y = "House Price (MSEK)"
+  ) +
+  bengtegard_theme()
+
+pred3
+```
+
+The scatter plot with line of best fit (95% confidence interval) shows a weak, positive relationship between the response variable house_price and the predictor plot_area (with an model marginal of R2 = 0.11). Two possible high leverage point is labeled (rows 1530 and 745 ) and one potential outlier (row 303)
+
+
+The fourth predictor for house_price is plot_area. Larger plots often allow for bigger homes, better location and more privacy. As such, land value itself can be a big contributor to price, especially in high-demand areas.
+
+```{r}
+pred4 <- ggplot(data_regression, aes(x = plot_area, y = house_price / 1e6)) +
+  geom_point(alpha = 0.5, color = "#1B9E77") +
+  stat_poly_line() +
+  stat_poly_eq(use_label(c("R2"))) +
+  geom_text_repel(
+    aes(label = ifelse(plot_area > 2300, rownames(data_clean), "")),
+    size = 3,
+    color = "red"
+  ) +
+  labs(
+    x = "Plot Area (m²)",
+    y = "House Price (MSEK)"
+  ) +
+  bengtegard_theme()
+
+pred4
+```
+
+The scatter plot with line of best fit (95% confidence interval) shows a moderate, positive relationship between the response variable house_price and the predictor operating_cost (with an model marginal of R2 = 0.15). Seven possible outliers or high leverage points is labeled (rows 765, 753, 384, 1684, 953, 952 and 1997).
+
+# Modeling
+
+Lets first fit the full model and check its model summary and assumptions.
+
+```{r}
+# Full model formula
+full_model <- lm(house_price ~ living_area + number_of_rooms + 
+              operating_cost + plot_area +  year +
+              year_built + secondary_area + secondary_area_missing + neighborhood,
+              data = houses_train)
+
+# Model summary
+summary(full_model)
+```
+
+
+```{r}
+# Check model assumptions with diagnostic plots
+check_model(full_model)
+```
+
+### Model assumptions:
+
+1. Posterior Predictive Check (Top Left)
+   
+The predicted distribution (blue) follows the observed one (green) fairly well. This suggests that the model captures the overall shape of the outcome distribution.
+
+2. Linearity (Top Right)
+
+The residuals vs fitted plot shows som curvature, suggesting:
+
+* Non-linearity between predictors and response variable
+* Possibly non-linear relationships (like log or polynomial terms)
+
+3. Homescedasticity (Middle Left)
+
+Heteroscedasticity present - residuals fan out as fitted values increase.
+
+4. Influential observations (Middle Right)
+
+A few points have high leverage and high standardized residuals (those labeled: e.g., 848, 872, 195). They're not dramatically off the charts, but worth checking.
+
+5. Collinearity (Bottom Left)
+
+All Variance Inflation Factor (VIF) values are below 5 (a common threshold for concern) except one. No strong multicollinearity.
+
+6. Normality of Residuals (Bottom Right)
+
+Some Skewness — The residuals deviate from the QQ-line at the tails (i.e., not perfectly normal).
+
+## Multiple regression model with log-transformed response variable
+
+The diagnostic plots suggests that there might exist a non-linear relationship between house_price and the predictors and that the model fit has room for improvement. By log-tranforming the response variable we might be able to stabilize variance and also handle outliers better.
+
+```{r}
+# Model formula with log-tranformed Y variable house_price
+log_model <- lm(log(house_price) ~ living_area + number_of_rooms + 
+              operating_cost + plot_area +
+              year_built + year + secondary_area + secondary_area_missing + neighborhood,
+              data = houses_train)
+
+# Check model assumptions with diagnostic plots
+check_model(log_model)
+```
+
+From the diagnostic plots it becomes apperent that the model fits better with an log-transformed response variable.
+
+# Types of Regression Models
+
+```{r, warning = FALSE, message = FALSE}
+# Model 1: Linear regression with only living_area
+linear_model <- lm(log(house_price) ~ living_area, data = houses_train)
+
+# Model 2: Multiple linear regression with all numeric predictors
+mlr_model <- lm(log(house_price) ~ living_area + number_of_rooms +
+  operating_cost + plot_area + year_built + year +  secondary_area + secondary_area_missing, 
+  data = houses_train)
+
+# Model 3: Multiple linear regression with all predictors (including categorical variable neighborhood)
+mlr_neighborhood <- lm(log(house_price) ~ living_area + number_of_rooms +
+  operating_cost + plot_area + year_built + year + secondary_area + secondary_area_missing + neighborhood, 
+  data = houses_train)
+
+# Model 4: Mixed-effects model with neighborhood as random effect
+mixed_model <- lmer(log(house_price) ~ living_area + number_of_rooms + 
+  operating_cost + plot_area + year_built + year + secondary_area + secondary_area_missing + (1 | neighborhood), 
+  data = houses_train)
+```
+
+## Model Evaluation
+
+```{r, warning = FALSE, message = FALSE}
+# Predictions
+val_pred_m1 <- predict(linear_model, newdata = houses_validate)
+val_pred_m2 <- predict(mlr_model, newdata = houses_validate)
+val_pred_m3 <- predict(mlr_neighborhood, newdata = houses_validate)
+val_pred_m4 <- predict(mixed_model, newdata = houses_validate, allow.new.levels = TRUE)
+
+# Actual log house prices
+actual_values <- log(houses_validate$house_price)
+
+# Calculate RMSE for each model
+rmse_m1 <- rmse(actual_values, val_pred_m1)
+rmse_m2 <- rmse(actual_values, val_pred_m2)
+rmse_m3 <- rmse(actual_values, val_pred_m3)
+rmse_m4 <- rmse(actual_values, val_pred_m4)
+
+# Calculate range of the actual values
+val_range <- max(actual_values) - min(actual_values)
+
+# Normalize RMSE using the range (min-max)
+nrmse_m1 <- rmse_m1 / val_range
+nrmse_m2 <- rmse_m2 / val_range
+nrmse_m3 <- rmse_m3 / val_range
+nrmse_m4 <- rmse_m4 / val_range
+
+# Format NRMSE for display
+nrmse_fmt <- function(x) paste0(round(x, 4), " (", round(x * 100, 2), "%)")
+
+# Get conditional and marginal R² for mixed model
+r2_mixed <- r.squaredGLMM(mixed_model)
+
+# Build performance table
+regression_results <- data.frame(
+  Model = c("Linear Regression (Living Area)", 
+            "Multiple Linear Regression (Numerical Predictors)", 
+            "Multiple Linear Regression (including Neighborhood)",
+            "Mixed Effects Model"),
+  `Residual Standard Error` = c(
+    sigma(linear_model),
+    sigma(mlr_model),
+    sigma(mlr_neighborhood),
+    sigma(mixed_model)
+  ),
+  `R squared` = c(
+    summary(linear_model)$r.squared,
+    summary(mlr_model)$r.squared,
+    summary(mlr_neighborhood)$r.squared,
+    r2_mixed[1, 2]  # Conditional R2
+  ),
+  `Adjusted R squared` = c(
+    summary(linear_model)$adj.r.squared,
+    summary(mlr_model)$adj.r.squared,
+    summary(mlr_neighborhood)$adj.r.squared,
+    r2_mixed[1, 1]  # Marginal R2
+  ),
+  AIC = c(
+    AIC(linear_model),
+    AIC(mlr_model),
+    AIC(mlr_neighborhood),
+    AIC(mixed_model)
+  ),
+  BIC = c(
+    BIC(linear_model),
+    BIC(mlr_model),
+    BIC(mlr_neighborhood),
+    BIC(mixed_model)
+  ),
+  RMSE = c(
+    rmse_m1,
+    rmse_m2,
+    rmse_m3,
+    rmse_m4
+  ),
+  NRMSE = c(
+    nrmse_fmt(nrmse_m1),
+    nrmse_fmt(nrmse_m2),
+    nrmse_fmt(nrmse_m3),
+    nrmse_fmt(nrmse_m4)
+  ),
+  check.names = FALSE
+)
+
+# Output HTML table with footnotes
+kable(regression_results, format = "html", caption = "Model Performance Comparison on Validation set") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), 
+                full_width = FALSE, position = "center") %>%
+  column_spec(1, bold = TRUE) %>%
+  column_spec(2:ncol(regression_results), width = "150px") %>%
+  footnote(
+    general = "The mixed effect model shows the variance explained by fixed effects alone (Marginal R² = 0.2474) and by both fixed and random effects (Conditional R² = 0.7864)",
+    general_title = "Note:",
+    footnote_as_chunk = TRUE,
+    escape = FALSE
+  )
+```
+
+The Mixed Effects Model performs similarly to the best model in terms of error (RMSE ≈ 0.17), but has the added benefit of easier interpretation. Unlike the multiple linear regression with 90 neighborhood dummy variables, the mixed model uses random effects for neighborhoods, making it more efficient and readable. It explains ~78.6% of the variance (R²), with a low NRMSE of 7.6%. This balance of performance and simplicity is why it was chosen as the final model.
+
+```{r}
+validation_results <- bind_rows(
+  tibble(model = "Linear", pred = val_pred_m1),
+  tibble(model = "Multiple", pred = val_pred_m2),
+  tibble(model = "MLR + Neighborhood", pred = val_pred_m3),
+  tibble(model = "Mixed", pred = val_pred_m4)
+) |>
+  mutate(actual = rep(log(houses_validate$house_price), 4),
+         model = factor(model),
+         price_actual = exp(actual),
+         price_pred = exp(pred))
+
+rmse_lookup <- tibble(
+  model = factor(c("Linear", "Multiple", "MLR + Neighborhood", "Mixed")),
+  dist = -c(rmse_m1, rmse_m2, rmse_m3, rmse_m4)
+)
+
+validation_results <- left_join(validation_results, rmse_lookup, by = "model")
+
+ggplot(validation_results, aes(x = price_actual / 1e6, y = price_pred / 1e6)) +
+  geom_point(alpha = 0.5, color = "black") + 
+  geom_smooth(method = "lm", se = FALSE, aes(group = model, color = model), alpha = 0.7, linewidth = 1.2) +  # Fitted lines for each model
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "#ff0000") +  
+  labs(
+    title = "Comparison of Fitted Regression Lines Across Models",
+    x = "Actual Price (MSEK)",
+    y = "Predicted Price (MSEK)",
+    color = "Model"
+  ) +
+  scale_color_manual(values = c("Linear" = "#4b4bc2", 
+                                "Multiple" = "#d45b5b", 
+                                "MLR + Neighborhood" = "#88e088", 
+                                "Mixed" = "#aa57dd")) +
+  bengtegard_theme() +
+  theme(
+    legend.position = "bottom", 
+    plot.title = element_text(hjust = 0.5),
+    axis.title.x = element_text(size = 12),
+    axis.title.y = element_text(size = 12)
+  ) +
+  coord_fixed(ratio = 1)
+```
+
+
+# Final Model Choice - Linear Mixed-Effect Model
+
+## Outlier analysis
+
+```{r, warning = FALSE, message = FALSE}
+# Diagnostic model information
+augmented_mixed_model <- augment(mixed_model)
+
+# Calculate studentized residuals
+std_cond_resid <- rstudent(mixed_model)
+
+# Get residual standard deviation
+resid_sd <- sigma(mixed_model) 
+
+# Add studentized conditional residuals manually
+augmented_mixed_model <- augmented_mixed_model |>
+  mutate(.std.cond.resid = std_cond_resid)
+
+# Calculate studentized conditional residuals above > 3
+outliers_std_cond <- augmented_mixed_model |>
+  filter(abs(.std.cond.resid) > 3) 
+
+# Print outliers based on studentized conditional residuals
+print(outliers_std_cond)
+```
+
+A total of 10 observations show standardized residuals above 3, which are typically considered strong outliers. Most of these correspond to houses in the higher price range and appear to reflect genuine variation rather than data issues. Since the model is intended to both explain and predict house prices, removing these observations could reduce its generalizability. However, a few cases display exceptionally large residuals and may warrant further investigation. This can be further explored through the residual plots.
+
+```{r, warning = FALSE, message = FALSE}
+library(ggrepel)
+
+ggplot(augmented_mixed_model, aes(x = .fitted, y = .std.cond.resid)) +
+  geom_point() +
+  geom_hline(yintercept = 0, color = "red") +
+  geom_hline(yintercept = c(-2, 2), color = "blue", linetype = "dashed") +
+  geom_text_repel(
+    aes(label = ifelse(abs(.std.cond.resid) > 3.3, rownames(augmented_mixed_model), "")),
+    size = 3,
+    color = "red"
+  ) +
+  labs(
+    x = "Fitted Values", 
+    y = "Studentized Conditional Residuals",
+    title = "Studentized Residuals vs Fitted Values"
+  )
+```
+
+From the residual plot, we can identify four observations that stand out from the rest: rows 1357, 192, 928, and 1267. All four have standardized residuals greater than 3.3 in absolute value, indicating that they deviate significantly from the model's predictions. These observations will be considered outliers or influential points, as they may disproportionately impact the model's estimates and potentially bias the results.
+
+## Compare Models after removing outliers
+
+```{r, warning = FALSE, message = FALSE}
+# Remove the outliers
+houses_train_cleaned <- houses_train[-c(1348, 184, 943, 340, 1262, 678, 829), ]
+
+# Refit the mixed model without the outliers
+mixed_model_clean <- lmer(log(house_price) ~ living_area + number_of_rooms + 
+                          operating_cost + plot_area + year_built + year + secondary_area + 
+                          secondary_area_missing + (1 | neighborhood), 
+                          data = houses_train_cleaned)
+
+
+# Compare AIC and BIC for both models
+aic_comparison <- AIC(mixed_model, mixed_model_clean)
+bic_comparison <- BIC(mixed_model, mixed_model_clean)
+
+# Display AIC and BIC
+print("AIC Comparison:")
+print(aic_comparison)
+
+print("BIC Comparison:")
+print(bic_comparison)
+
+# Calculate R² values (Marginal and Conditional) for both models
+r2_mixed_model <- performance::r2(mixed_model)
+r2_mixed_model_clean <- performance::r2(mixed_model_clean)
+
+# Display R² values
+cat("\nR² Values (Marginal / Conditional):\n")
+cat("Original Mixed Model: ", round(r2_mixed_model$R2_marginal, 3), "/", round(r2_mixed_model$R2_conditional, 3), "\n")
+cat("Cleaned Mixed Model:  ", round(r2_mixed_model_clean$R2_marginal, 3), "/", round(r2_mixed_model_clean$R2_conditional, 3), "\n")
+
+```
+
+Removing the outliers improves both AIC and conditional R², while lowering the BIC. Therefore, the model without outliers is preferable for further analysis and prediction.
+
+## Test Best Model
+```{r}
+# Predict on the test set for final unbiased evaluation
+final_predictions <- predict(mixed_model_clean, newdata = houses_test, allow.new.levels = TRUE)
+
+predicted_prices_test <- exp(final_predictions) # transform to original scale
+actual_prices_test <- houses_test$house_price
+
+# Plot Predicted Price
+ggplot(houses_test, aes(x = actual_prices_test / 1e6, y = predicted_prices_test / 1e6)) +
+  geom_point(alpha = 0.6, color = "#1B9E77") +
+  geom_smooth(method = "lm", se = FALSE, color = "darkred") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray30") +
+  labs(
+    x = "Actual House Price (MSEK)",
+    y = "Predicted House Price (MSEK)",
+    title = "Final Model Predictions on Test Set",
+    caption = "Dashed line shows perfect predictions (y = x)."
+  ) +
+  bengtegard_theme()
+```
+
+## Check Model assumption
+
+```{r}
+check_model(mixed_model_clean)
+```
+
+**Model assumptions**
+
+Posterior Predictive Check:
+The predicted data closely follows the observed log-transformed house prices, suggesting good model fit.
+
+Linearity:
+The residuals appear randomly scattered around zero, indicating that the linearity assumption holds.
+
+Collinearity (VIF):
+All VIF values are below 5, suggesting no serious multicollinearity among predictors.
+
+High leverage points:
+There is some data points that exhibit high leverage and might be due to houses within the higher price range.
+
+Normality of Residuals And Random Effects:
+The Q-Q plot shows that most residuals lie close to the line for both fixed effects and random effects, suggesting normality.
+
+
+## Residual Distribution
+```{r}
+# Diagnostic model information
+augmented_mixed_model_clean <- augment(mixed_model_clean)
+
+ggplot(augmented_mixed_model_clean, aes(x = .resid)) +
+  geom_density(fill = "darkblue", alpha = 0.7) +
+  labs(
+    title = "Residual Distribution",
+    x = "Residuals",
+    y = "Frequency"
+  ) 
+```
+
+Residuals looks normally distributed. Nice!
+
+## Final Model Summary
+```{r}
+final_rmse <- rmse(actual_prices_test, predicted_prices_test)
+
+# Calculate value range for NRMSE
+test_range <- max(actual_prices_test) - min(actual_prices_test)
+nrmse_final <-  final_rmse / test_range
+
+# Conditional and Marginal R² for final model
+r2_final <- r.squaredGLMM(mixed_model_clean)
+
+final_model_summary <- data.frame(
+  Metric = c(
+    "Residual Standard Error",
+    "Marginal R² (Fixed effects)",
+    "Conditional R² (Fixed + Random effects)",
+    "AIC",
+    "BIC",
+    "RMSE (in millions SEK)",
+    "NRMSE"
+  ),
+  Value = c(
+    round(sigma(mixed_model), 3),
+    round(r2_final[1, 1], 4),
+    round(r2_final[1, 2], 4),
+    round(AIC(mixed_model), 1),
+    round(BIC(mixed_model), 1),
+    round(final_rmse),  # RMSE in millions SEK, rounded to 2 decimal places
+    nrmse_fmt(nrmse_final)
+  )
+)
+
+# Display the performance summary table
+knitr::kable(final_model_summary, caption = "Performance Summary of Final Mixed Effects Model")
+
+```
+
+## Wald-chi square tests for significance of fixed effects
+
+```{r}
+Anova(mixed_model_clean, type = 3) 
+```
+
+Most variables significantly affect house prices. Living area, plot area, year built, year of sale, and number of rooms have strong effects. Operating cost is borderline, and missing secondary area is not significant.
+
+```{r}
+summary(mixed_model_clean)
+```
+
+In the final model, all main predictors except operating cost and secondary_area_missing were statistically significant at the 0.05 level. A 1 m² increase in living area was associated with an approximate 0.29% increase in house price, while one additional room increased price by 2.23%. Each extra square meter of plot area was linked to a 0.018% price increase, and homes built more recently sold for more — with a 0.19% increase per year built. Sale date had a small positive effect (0.0033% per day), reflecting general price appreciation over time. Houses missing secondary area data were associated with a 3.56% lower sale price.
+
+Although the effect of operating cost was small (0.00013% per SEK) and only marginally significant, it was included in the final model due to theoretical relevance.
+
+Random effects captured variation between neighborhoods. The intraclass correlation coefficient (ICC) was high, indicating that approximately 74% of the variance in house prices could be attributed to differences between neighborhoods. This supports the inclusion of a random intercept for neighborhood, accounting for clustered structure in the data.
+
+
+```{r, warning = FALSE, message = FALSE}
+# Standardize all continuous predictors
+houses_train_scaled_all <- houses_train_cleaned |>
+  mutate(across(c(living_area, number_of_rooms, operating_cost, plot_area, secondary_area, year_built), scale))
+
+# Re-fit the model with standardized predictors
+mixed_model_standardized <- lmer(log(house_price) ~ living_area + number_of_rooms + operating_cost + plot_area + year_built + year +  secondary_area + secondary_area_missing + (1 | neighborhood), 
+  data = houses_train_scaled_all)
+
+```
+
+Note: Due to the differences in scale among predictor variables (such as living area, number of rooms, etc.), I've used centered and scaled values for all predictors. This was necessary for evaluating the impact of each fixed effect against each other.
+
+## Standardized Coefficient Plot for Fixed Effects
+```{r}
+# Get the coefficients and confidence intervals from the model
+fixed_eff_standardized <- broom.mixed::tidy(mixed_model_standardized, effects = "fixed", conf.int = TRUE)
+
+# Exponentiate the coefficients and confidence intervals
+fixed_eff_exp_standardized <- fixed_eff_standardized %>%
+  mutate(across(c(estimate, conf.low, conf.high), exp))
+
+# Convert exponentiated coefficients to percentage change
+fixed_eff_exp_standardized$percent_change <- (fixed_eff_exp_standardized$estimate - 1) * 100
+
+# Coefficient plot 
+ggplot(fixed_eff_exp_standardized, aes(x = estimate, y = term)) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.2) +
+  scale_x_continuous(trans = 'log10', limits = c(0.9, 1.5)) +
+  labs(title = "Impact of Predictors on House Price (Log-Scale)",
+       subtitle = "Exponentiated fixed effects with 95% confidence intervals",
+       x = "Effect on House Price for One Standard Deviation Change",
+       y = "Predictors") +
+  bengtegard_theme() +
+  geom_text(aes(label = paste0(round(percent_change, 1), "%")), 
+            hjust = 0.3, vjust = -2, size = 4, color = "#ff6347")
+```
+
+## Plotting Random Effect (Neighborhood)
+```{r, warning = FALSE, message = FALSE, fig.height = 12}
+# Plot random effects from your mixed model
+plot_model(mixed_model_clean, type = "re", show.values = FALSE, show.p = FALSE) +
+  labs(title = "Random Effects: Neighborhood Intercepts", 
+       x = "Random Effect Estimate", 
+       y = "Neighborhood") +
+  bengtegard_theme()
+
+```
+
+## Table of Model summary with 95% CI for all predictors
+
+```{r, warning = FALSE, message = FALSE}
+tab_model(mixed_model_standardized,
+          show.re.var = TRUE,              
+          pred.labels = c( "(Intercept)", "Living area (m²)", "Number of rooms", "Operating cost (SEK)", "Plot area (m²)", "Year built", 
+          "Sale Year", "Secondary area missing (Yes/No)"),
+          dv.labels = "Impact of Predictors on House Sale Price",            
+          show.p = TRUE,                      
+          p.style = "numeric",                
+          digits = 3,                        
+          string.ci = "95% CI",               
+          transform = NULL)                   
+```
+
+```{r}
+exp_fixef <- exp(fixef(mixed_model_clean))
+randef <- ranef(mixed_model_clean)
+
+# Exponentiate the random effects
+exp_randef <- exp(randef[[1]])
+
+# View the exponentiated fixed + random effects
+print(exp_fixef)
+print(exp_randef)
+```
+
+## Prediction intervals
+```{r}
+predict_prices_with_random_effects <- function(house_df, model, group_var = "neighborhood") {
+  # Fixed effects
+  exp_fixef <- exp(fixef(model))
+  
+  # Random intercepts
+  ranef_vals <- ranef(model)[[group_var]]
+  ranef_vals$group <- rownames(ranef_vals)
+  
+  # Join random effects to house data
+  house_df$group <- as.character(house_df[[group_var]])
+  house_df <- merge(house_df, ranef_vals, by = "group", all.x = TRUE)
+  
+  # Handle missing neighborhoods (i.e., new levels)
+  house_df$`(Intercept)`[is.na(house_df$`(Intercept)`)] <- 0
+  
+  # Calculate exponentiated intercepts
+  house_df$rand_intercept_exp <- exp(house_df$`(Intercept)`)
+  intercept_exp <- exp_fixef["(Intercept)"]
+  
+  # Predict prices
+  house_df$predicted_price <- intercept_exp * house_df$rand_intercept_exp *
+    exp_fixef["living_area"]^house_df$living_area *
+    exp_fixef["number_of_rooms"]^house_df$number_of_rooms *
+    exp_fixef["operating_cost"]^house_df$operating_cost *
+    exp_fixef["plot_area"]^house_df$plot_area *
+    exp_fixef["year_built"]^house_df$year_built *
+    exp_fixef["year"]^house_df$year *
+    exp_fixef["secondary_area"]^house_df$secondary_area *
+    exp_fixef["secondary_area_missing"]^house_df$secondary_area_missing
+  
+  return(house_df[, c(group_var, "predicted_price")])
+}
+
+# Example prediction
+example_houses <- data.frame(
+  neighborhood = c("Fosie", "Limhamn"),
+  living_area = c(130, 100),
+  number_of_rooms = c(5, 3),
+  operating_cost = c(5000, 10000),
+  plot_area = c(100, 250),
+  year_built = c(2005, 1993),
+  year = c(2019, 2021),
+  secondary_area = c(30, 0),
+  secondary_area_missing = c(0, 1)
+)
+
+preds <- predict_prices_with_random_effects(example_houses, mixed_model_clean)
+knitr::kable(preds, caption = "Predicted House Prices with Random Effects")
+
+```
+
+
+

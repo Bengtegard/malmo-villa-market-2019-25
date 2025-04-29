@@ -1,0 +1,36 @@
+name: malmo_houses_env_r
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - r-base=4.3.3
+  - r-skimr
+  - r-tidyverse
+  - r-ggplot2
+  - r-car
+  - r-dotenv
+  - r-e1071
+  - r-lubridate
+  - r-tidymodels
+  - r-caret
+  - r-corrplot
+  - r-ggpmisc
+  - r-ggrepel
+  - r-scales
+  - r-performance
+  - r-broom
+  - r-viridis
+  - r-ggridges
+  - r-lme4
+  - r-knitr
+  - r-kableExtra
+  - r-MuMIn
+  - r-Metrics
+  - r-sjPlot
+  - r-httpgd
+  - r-ggmap
+  - r-sf
+  - r-RColorBrewer
+  - r-broom.mixed
+  - r-rcpp  # Sometimes required for certain packages
+
