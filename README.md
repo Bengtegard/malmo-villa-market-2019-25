@@ -42,9 +42,12 @@ Follow these steps to set up and run the project:
 ### 1. **Clone the Repository**
    Clone the repository to your local machine using Git:
    ```bash
-   git clone https://github.com/your-username/malmo-housing-project.git
-   cd malmo-housing-project
-conda env create -f environment.yml
-conda activate malmo-housing-env
-rmarkdown::render("exploratory_analysis.Rmd")
+   git clone https://github.com/bengtegard/malmo-villa-market-2019-25.git
+   cd malmo-villa-market-2019-25
+
+   # Create and Activate the Conda Environment
+   conda env create -f environment.yml
+   conda activate malmo-housing-env
+   # Run the Rmarkdown file
+   rmarkdown::render("exploratory_analysis.Rmd")
 
