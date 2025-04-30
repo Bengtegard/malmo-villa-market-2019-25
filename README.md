@@ -17,7 +17,7 @@ You can view the full Exploratory Data Analysis (EDA) and statistical report by 
 
 
 ## Project Structure
-
+```
 malmo-housing-project/
 │── data/                           # Data folders 
 │   │── raw/                        # Raw data directly from Hemnet
@@ -34,8 +34,9 @@ malmo-housing-project/
 │   │── visualization/              # Scripts for visualizing data and model results
 │── environment.yml                 # Conda environment file
 │── README.md                       # Project documentation
+```
 
-## How to Use
+## Setup
 
 Follow these steps to set up and run the project:
    ```bash
