@@ -10,6 +10,20 @@ An important aspect of the model is that it adjusts the price depending on the n
 
 In summary: both the size of the house and its location are crucial factors in determining the price. Where you live can influence the price as much as the house's characteristics. The model's fixed effects explain 23% of the variation in house prices, and when neighborhood differences (random effects) are also accounted for, around 80% of the variation is explained.
 
+## Data Visualization Examples
+
+### Geo-data Plot
+
+Here’s an example of the geographic distribution of villa prices in Malmö:
+
+![Geo-data Plot](reports/figures/malmo_geodata.png)
+
+### Heatmap
+
+This heatmap shows the monthly median sale prices of villas in Malmö (2020-2024)
+
+![Heatmap](reports/figures/heatmap_house_price_trends.png)
+
 ## Exploratory Data Analysis (EDA) Report
 You can view the full explanatory analysis and statistical report by clicking the link below:
 
