@@ -135,39 +135,6 @@ pages <- 50
 # Start scraping with an explicit page limit
 tidy_hemnet_data <- scrape_hemnet(pages)
 
+# Save to an csv file
 write.csv(tidy_hemnet_data, "hemnet_sold_properties.csv", row.names = FALSE)
 
-
-
-register_google(key = "AIzaSyCQ33HO-db-p2QZz56DmSpMpd6brF-0qss")
-
-# Define the center and zoom level for Malmö
-malmo_center <- c(lon = 13.0038, lat = 55.6049)
-zoom_level <- 11
-
-# Fetch the base map
-malmo_map <- get_map(location = malmo_center, zoom = zoom_level, maptype = "roadmap", source = "google")
-
-# Prepare your spatial data_clean
-malmo_data_sf <- data |>
-    select(latitude, longitude, house_price, neighborhood) |>
-    filter(
-        latitude >= 55 & latitude <= 56,
-        longitude >= 12 & longitude <= 14
-    ) |>
-    st_as_sf(coords = c("longitude", "latitude"))
-
-ggmap(malmo_map) +
-    geom_sf(data = malmo_data_sf, aes(color = log(house_price)), alpha = 0.5, size = 1.5, inherit.aes = FALSE) +
-    scale_color_viridis_c(name = "Log of Final price (SEK)") +
-    ggtitle("House Prices in Malmö from 2019 to 2025") +
-    bengtegard_theme() +
-    labs(caption = "Data from hemnet.se") +
-    theme(
-        legend.position = "bottom",
-        axis.title.x = element_blank(),
-        axis.title.y = element_blank(),
-    )
-
-# Save the plot
-ggsave("malmo_map.png", width = 8, height = 6)

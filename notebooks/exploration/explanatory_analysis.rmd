@@ -304,7 +304,6 @@ sales_trends_plot
 ## Is there any spatial trends of the distribution of price? 
 
 ```{r malmo-map-plot, eval=FALSE}
-# Code for generating the Malmö map
 register_google(key = "google_key")
 
 malmo_center <- c(lon = 13.0038, lat = 55.6049)
