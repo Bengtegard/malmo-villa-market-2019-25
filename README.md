@@ -17,20 +17,34 @@ You can view the full Exploratory Data Analysis (EDA) and statistical report by 
 
 
 ## Project Structure
-The project is organized into the following directories:
-### Explanation of Each Folder:
-- **`data/raw/`**: Contains raw, unmodified data directly from Hemnet.
-- **`data/processed/`**: Contains cleaned and processed data ready for analysis.
-- **`data/external/`**: Contains external data from SCB using their API pxweb.
-- **`docs/`**: Documentation files, e.g. the raw html file from the knitting rmarkdown.
-- **`models/`**: Files related to the regression models used in the analysis.
-- **`notebooks/exploration`**: Rmarkdown files used for generating the EDA report.
-- **`reports/figures/`**: Figures and plots generated for the report.
-- **`src/data/`**: Scripts for web scraping, cleaning and processing data.
-- **`src/models/`**: Scripts for training, evaluating, and regression models.
-- **`src/visualization/`**: Scripts for visualizing data and model results.
-- **`environment.yml`**: Conda environment file that specifies the dependencies and environment setup.
+
+malmo-housing-project/
+│── data/                           # Data folders 
+│   │── raw/                        # Raw data directly from Hemnet
+│   │── interim/                    # Data for regression and splitting
+│   │── processed/                  # Cleaned and processed data
+│   │── external/                   # External data from SCB API (pxweb)
+│── docs/                           # Documentation files (e.g., Rmarkdown-generated HTML report)
+│── models/                         # Files related to regression models used in the analysis
+│── notebooks/                       # Rmarkdown notebooks
+│── reports/figures/                 # Generated figures and plots for the report
+│── src/                             # Source code
+│   │── data/                       # Scripts for web scraping, cleaning, and processing data
+│   │── models/                     # Scripts for training, evaluating, and saving models
+│   │── visualization/              # Scripts for visualizing data and model results
+│── environment.yml                 # Conda environment file
+│── README.md                       # Project documentation
 
 ## How to Use
-1. Clone the repository to your local machine.
-2. Open the analysis files.
+
+Follow these steps to set up and run the project:
+
+### 1. **Clone the Repository**
+   Clone the repository to your local machine using Git:
+   ```bash
+   git clone https://github.com/your-username/malmo-housing-project.git
+   cd malmo-housing-project
+conda env create -f environment.yml
+conda activate malmo-housing-env
+rmarkdown::render("exploratory_analysis.Rmd")
+
