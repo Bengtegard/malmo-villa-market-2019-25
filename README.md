@@ -1,5 +1,5 @@
 # Malmö Villa Market Analysis 2019–2025
-A web scraping and regression analysis project using villa sales data from Hemnet.
+Web scraping and regression analysis in R using villa sales data from Hemnet
 
 ## Executive Summary
 This project investigates how sold villas (from Hemnet) within Malmö Municipality vary. The statistical model takes into account both the characteristics of the house (such as living area, operating costs, number of rooms, etc.) and the neighborhood in which the house is located (e.g., Limhamn, Fosie, Rosengård).
