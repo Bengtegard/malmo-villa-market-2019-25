@@ -46,7 +46,8 @@ Follow these steps to set up and run the project:
 
    # Create and Activate the Conda Environment
    conda env create -f environment.yml
-   conda activate malmo-housing-env
+   conda activate malmo-housing-env_r
+
    # Run the Rmarkdown file
    rmarkdown::render("exploratory_analysis.Rmd")
 
