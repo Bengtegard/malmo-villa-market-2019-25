@@ -38,10 +38,8 @@ malmo-housing-project/
 ## How to Use
 
 Follow these steps to set up and run the project:
-
-### 1. **Clone the Repository**
-   Clone the repository to your local machine using Git:
    ```bash
+   # Clone the repo
    git clone https://github.com/bengtegard/malmo-villa-market-2019-25.git
    cd malmo-villa-market-2019-25
 
