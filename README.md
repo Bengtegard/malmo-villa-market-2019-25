@@ -11,7 +11,7 @@ An important aspect of the model is that it adjusts the price depending on the n
 In summary: both the size of the house and its location are crucial factors in determining the price. Where you live can influence the price as much as the house's characteristics. The model's fixed effects explain 23% of the variation in house prices, and when neighborhood differences (random effects) are also accounted for, around 80% of the variation is explained.
 
 ## Exploratory Data Analysis (EDA) Report
-You can view the full Exploratory Data Analysis (EDA) and statistical report by clicking the link below:
+You can view the full explanatory analysis and statistical report by clicking the link below:
 
 [View the full explanatory analysis report](https://github.com/Bengtegard/malmo-villa-market-2019-25/releases/download/v1.0/explanatory_analysis.html)
 
