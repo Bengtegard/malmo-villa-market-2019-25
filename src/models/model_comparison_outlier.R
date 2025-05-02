@@ -5,7 +5,7 @@ library(performance)
 # For reproducibility
 set.seed(1337)
 
-# Load the dataset (adjust path as needed)
+# Load the dataset
 houses_train <- read.csv("data/processed/houses_train.csv")
 
 # ------------------------- Outlier Removal -------------------------
