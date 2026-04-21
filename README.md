@@ -30,6 +30,11 @@ This ridgeline plot shows the distribution of house prices in the ten most expen
 
 ![Ridgline Plot](reports/figures/top10_neighborhoods_distribution.png)
 
+
+
+<img width="3600" height="2400" alt="price_vs_age" src="https://github.com/user-attachments/assets/80553592-fa63-4228-8b7a-41d08e33662e" />
+
+
 ## Exploratory Data Analysis (EDA) Report
 You can view the full explanatory analysis and statistical report by clicking the link below:
 
