@@ -24,13 +24,9 @@ This heatmap shows the monthly median sale prices of villas in Malmö (2020-2024
 
 ![Heatmap](reports/figures/heatmap_house_price_trends.png)
 
-### Ridgline Plot
-
-This ridgeline plot shows the distribution of house prices in the ten most expensive neighborhoods in Malmö.
+### Ridgline Plots
 
 ![Ridgline Plot](reports/figures/top10_neighborhoods_distribution.png)
-
-
 
 <img width="3600" height="2400" alt="price_vs_age" src="https://github.com/user-attachments/assets/80553592-fa63-4228-8b7a-41d08e33662e" />
 
